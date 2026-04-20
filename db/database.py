@@ -7,6 +7,7 @@ get_connection() to return an asyncpg pool. All query methods stay the same.
 import hashlib
 import logging
 import os
+import re
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 
@@ -18,6 +19,7 @@ logger = logging.getLogger(__name__)
 
 DB_PATH = os.getenv("DATABASE_PATH", "./data/newsagent.db")
 TRIAL_DAYS = int(os.getenv("TRIAL_DAYS", 3))
+SOURCE_LINK_RE = re.compile(r"^(?:@[\w\d_]{4,}|https?://t\.me/[\w\d_]{4,}(?:/\d+)?)$")
 
 
 @asynccontextmanager
@@ -138,13 +140,17 @@ async def get_all_active_channels() -> list[dict]:
 # ─── Sources ──────────────────────────────────────────────────────────────────
 
 async def add_source(channel_id: int, source_tg_link: str) -> int:
+    normalized_link = source_tg_link.strip()
+    if not SOURCE_LINK_RE.match(normalized_link):
+        raise ValueError("Invalid source Telegram link format")
+
     async with get_connection() as db:
         cursor = await db.execute(
             """
             INSERT OR IGNORE INTO sources (channel_id, source_tg_link)
             VALUES (?, ?)
             """,
-            (channel_id, source_tg_link.strip()),
+            (channel_id, normalized_link),
         )
         await db.commit()
         return cursor.lastrowid
@@ -181,16 +187,35 @@ def _content_hash(text: str) -> str:
 
 
 async def is_duplicate(source_post_id: str, channel_id: int, text: str) -> bool:
+    _, is_dup = await get_duplicate_reason(source_post_id, channel_id, text)
+    return is_dup
+
+
+async def get_duplicate_reason(source_post_id: str, channel_id: int, text: str) -> tuple[str | None, bool]:
+    """Check duplicate only inside one output channel and return reason."""
     h = _content_hash(text)
     async with get_connection() as db:
-        cursor = await db.execute(
+        source_cursor = await db.execute(
             """
             SELECT id FROM processed_posts
-            WHERE (source_post_id = ? AND channel_id = ?) OR content_hash = ?
+            WHERE source_post_id = ? AND channel_id = ?
             """,
-            (source_post_id, channel_id, h),
+            (source_post_id, channel_id),
         )
-        return await cursor.fetchone() is not None
+        if await source_cursor.fetchone() is not None:
+            return "same_source_post_id", True
+
+        hash_cursor = await db.execute(
+            """
+            SELECT id FROM processed_posts
+            WHERE content_hash = ? AND channel_id = ?
+            """,
+            (h, channel_id),
+        )
+        if await hash_cursor.fetchone() is not None:
+            return "same_content_hash", True
+
+        return None, False
 
 
 async def mark_as_processed(source_post_id: str, channel_id: int, text: str):

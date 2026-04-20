@@ -10,6 +10,7 @@ from db.database import (
     get_sources_for_channel,
     get_all_sources,
     is_duplicate,
+    get_duplicate_reason,
     mark_as_processed,
     get_stats,
 )
@@ -26,6 +27,7 @@ __all__ = [
     "get_sources_for_channel",
     "get_all_sources",
     "is_duplicate",
+    "get_duplicate_reason",
     "mark_as_processed",
     "get_stats",
 ]
