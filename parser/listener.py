@@ -9,6 +9,7 @@ import os
 import re
 
 from telethon import TelegramClient, events
+from telethon.utils import get_peer_id
 from telethon.tl.types import MessageMediaPhoto, MessageMediaDocument
 
 from core.processor import rewrite_post, build_image_url, format_telegram_message
@@ -30,6 +31,18 @@ def _extract_username(link: str) -> str:
     link = re.sub(r"https?://(t\.me|telegram\.me)/", "", link)
     link = link.lstrip("@").split("/")[0]
     return link
+
+
+def _normalize_chat_id(value: int | None) -> int | None:
+    """Normalize Telegram IDs to Telethon peer-id format (-100... for channels)."""
+    if value is None:
+        return None
+    value_str = str(value)
+    if value_str.startswith("-100"):
+        return value
+    if value < 0:
+        return value
+    return int(f"-100{value}")
 
 
 async def _process_message(
@@ -86,14 +99,20 @@ async def start_listener():
     for username, configs in source_map.items():
         try:
             entity = await client.get_entity(username)
-            watched_entities[entity.id] = configs
-            logger.info("Subscribed to: @%s (id=%d)", username, entity.id)
+            peer_id = _normalize_chat_id(get_peer_id(entity))
+            watched_entities[peer_id] = configs
+            logger.info(
+                "Subscribed to: @%s (entity.id=%s, peer_id=%s)",
+                username,
+                entity.id,
+                peer_id,
+            )
         except Exception as e:
             logger.error("Cannot resolve @%s: %s", username, e)
 
     @client.on(events.NewMessage())
     async def handler(event):
-        sender_id = event.chat_id
+        sender_id = _normalize_chat_id(event.chat_id)
         configs = watched_entities.get(sender_id)
         if not configs:
             return
@@ -101,9 +120,20 @@ async def start_listener():
         # Extract text (message or photo caption)
         text = event.message.text or event.message.message or ""
         if len(text) < MIN_TEXT_LENGTH:
+            logger.info(
+                "Skipped short message from %s (length=%d, min=%d).",
+                sender_id,
+                len(text),
+                MIN_TEXT_LENGTH,
+            )
             return
 
         source_post_id = f"{sender_id}_{event.message.id}"
+        logger.info(
+            "Incoming message from source %s, dispatching to %d channel(s).",
+            sender_id,
+            len(configs),
+        )
 
         for cfg in configs:
             asyncio.create_task(
