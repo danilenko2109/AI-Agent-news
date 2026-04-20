@@ -3,7 +3,7 @@ telethon==1.36.0
 google-generativeai==0.7.2
 aiosqlite==0.20.0
 apscheduler==3.10.4
-aiohttp==3.10.5
+aiohttp==3.9.5
 python-dotenv==1.0.1
 pillow==10.4.0
 cryptography==43.0.0
