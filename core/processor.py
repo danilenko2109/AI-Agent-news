@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import re
+import asyncio
 import urllib.parse
 
 import google.generativeai as genai
@@ -43,6 +44,7 @@ PROMPT_STYLES: dict[str, str] = {
     "breaking": SYSTEM_PROMPT + "\nВикористовуй ТЕРМІНОВО / BREAKING NEWS на початку заголовку.",
     "analytical": SYSTEM_PROMPT + "\nДодай аналітичний коментар наприкінці тексту (1 речення).",
 }
+GEMINI_RETRIES = int(os.getenv("GEMINI_RETRIES", 3))
 
 
 def _clean_raw_text(text: str) -> str:
@@ -67,21 +69,34 @@ async def rewrite_post(raw_text: str, prompt_style: str = "default") -> dict | N
     system = PROMPT_STYLES.get(prompt_style, SYSTEM_PROMPT)
     full_prompt = f"{system}\n\nОригінальна новина:\n{cleaned}"
 
-    try:
-        response = await _MODEL.generate_content_async(full_prompt)
-        raw_json = response.text.strip()
-        # Strip accidental markdown fences
-        raw_json = re.sub(r"```json|```", "", raw_json).strip()
-        data = json.loads(raw_json)
-        if not all(k in data for k in ("title", "text", "image_prompt")):
-            raise ValueError("Missing keys in response")
-        return data
-    except json.JSONDecodeError as e:
-        logger.error("JSON parse error from Gemini: %s | raw: %s", e, response.text[:200])
-        return None
-    except Exception as e:
-        logger.error("Gemini error: %s", e)
-        return None
+    for attempt in range(1, GEMINI_RETRIES + 1):
+        response = None
+        try:
+            response = await _MODEL.generate_content_async(full_prompt)
+            raw_json = (response.text or "").strip()
+            # Strip accidental markdown fences
+            raw_json = re.sub(r"```json|```", "", raw_json).strip()
+            data = json.loads(raw_json)
+            if not all(k in data for k in ("title", "text", "image_prompt")):
+                raise ValueError("Missing keys in response")
+            return data
+        except json.JSONDecodeError as e:
+            snippet = ((response.text if response else "") or "")[:200]
+            logger.error("JSON parse error from Gemini: %s | raw: %s", e, snippet)
+            return None
+        except Exception as e:
+            err = str(e).lower()
+            transient = any(
+                token in err for token in ("timeout", "429", "resource_exhausted", "unavailable", "deadline")
+            )
+            if transient and attempt < GEMINI_RETRIES:
+                backoff = 2 ** (attempt - 1)
+                logger.warning("Gemini transient error (attempt %d/%d): %s", attempt, GEMINI_RETRIES, e)
+                await asyncio.sleep(backoff)
+                continue
+            logger.error("Gemini error: %s", e)
+            return None
+    return None
 
 
 def build_image_url(prompt: str, width: int = 1280, height: int = 720) -> str:

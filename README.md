@@ -215,11 +215,51 @@ sudo systemctl start newsagent
 
 ---
 
-## 🐛 Troubleshooting
+## 🐛 Діагностика
+
+### 1) Базова перевірка конфігу
+
+Переконайтесь, що в `.env` заповнені:
+
+- `TELEGRAM_API_ID`, `TELEGRAM_API_HASH`, `TELEGRAM_PHONE`
+- `ADMIN_BOT_TOKEN`
+- `GEMINI_API_KEY`
+- (опційно) `SOURCES_REFRESH_SECONDS`, `GEMINI_RETRIES`, `PUBLISH_RETRIES`, `POST_DELAY`
+
+### 2) Перевірка каналів і доступів
+
+У адмін-боті виконайте:
+
+```text
+/diagnose
+```
+
+Команда перевіряє:
+- валідність `bot_token` для кожного каналу,
+- доступ бота до `target_channel_id` та його статус у каналі,
+- резолв джерел `source_tg_link` через Telethon.
+
+### 3) Як читати логи пайплайна
+
+У логах є ключові етапи:
+
+- `incoming_message` / `received` — подію отримано від донора.
+- `dedupe_skip` — публікація пропущена, причина дедупа (`same_source_post_id` або `same_content_hash`).
+- `rewritten` / `rewrite_failed` — результат Gemini.
+- `publish_success` / `publish_failed` — результат публікації в Telegram.
+- `sources_refreshed` — listener перечитав джерела з БД.
+
+### 4) Нові джерела не працюють одразу
+
+Listener автоматично оновлює список джерел кожні `SOURCES_REFRESH_SECONDS` (за замовчуванням 60 сек).  
+Перезапуск процесу більше не потрібен.
+
+### 5) Типові проблеми
 
 | Проблема | Рішення |
 |----------|---------|
-| `FloodWaitError` | Telethon чекає. Збільшіть `POST_DELAY` у `.env` |
-| Gemini не повертає JSON | Перевірте `GEMINI_API_KEY`. Логи у `core/processor.py` |
-| Бот не публікує | Переконайтесь що бот є **адміном** каналу з правом публікації |
-| `Cannot resolve @channel` | Канал приватний або не існує. Перевірте `source_tg_link` |
+| `publish_failed` або помилки доступу | Переконайтесь, що бот є **адміном** каналу з правом публікації |
+| Часті `TelegramRetryAfter` | Збільшіть `POST_DELAY`, за потреби `PUBLISH_RETRIES` |
+| Gemini повертає помилки/таймаути | Перевірте `GEMINI_API_KEY`; збільшіть `GEMINI_RETRIES` |
+| `dedupe_skip` для різних каналів | Перевірте, що канали мають різний `channel_id` у БД; дедуп працює в межах одного каналу |
+| `Cannot resolve @channel` | Джерело приватне/некоректне; перевірте `source_tg_link` (`@name` або `https://t.me/name`) |

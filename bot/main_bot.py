@@ -11,6 +11,7 @@ Commands:
 
 import logging
 import os
+import re
 from contextlib import suppress
 
 from aiogram import Bot, Dispatcher, F, Router
@@ -46,6 +47,9 @@ TELEGRAM_API_ID = int(os.getenv("TELEGRAM_API_ID", 0))
 TELEGRAM_API_HASH = os.getenv("TELEGRAM_API_HASH", "")
 
 router = Router()
+BOT_TOKEN_RE = re.compile(r"^\d{6,}:[A-Za-z0-9_-]{20,}$")
+TARGET_CHANNEL_RE = re.compile(r"^(?:@[A-Za-z][A-Za-z0-9_]{4,}|-100\d{6,})$")
+SOURCE_LINK_RE = re.compile(r"^(?:@[\w\d_]{4,}|https?://t\.me/[\w\d_]{4,}(?:/\d+)?)$")
 
 
 # ─── FSM States ───────────────────────────────────────────────────────────────
@@ -74,6 +78,18 @@ def _trial_or_active_badge(user: dict) -> str:
         days = max(0, delta.days)
         return f"🕐 Пробний період: {days} дн. залишилось"
     return "❌ Підписка закінчилась"
+
+
+def _is_valid_bot_token(value: str) -> bool:
+    return bool(BOT_TOKEN_RE.match(value.strip()))
+
+
+def _is_valid_target_channel(value: str) -> bool:
+    return bool(TARGET_CHANNEL_RE.match(value.strip()))
+
+
+def _is_valid_source_link(value: str) -> bool:
+    return bool(SOURCE_LINK_RE.match(value.strip()))
 
 
 # ─── Handlers ─────────────────────────────────────────────────────────────────
@@ -132,9 +148,21 @@ async def cmd_add_channel(message: Message, state: FSMContext):
 @router.message(AddChannelStates.waiting_bot_token)
 async def process_bot_token(message: Message, state: FSMContext):
     token = message.text.strip()
-    if ":" not in token or len(token) < 20:
+    if not _is_valid_bot_token(token):
         await message.answer("❌ Невірний формат токена. Спробуйте ще раз.")
         return
+    bot = Bot(token=token)
+    try:
+        await bot.get_me()
+    except TelegramUnauthorizedError:
+        await message.answer("❌ Невалідний bot token (Unauthorized).")
+        return
+    except Exception as e:
+        logger.warning("Bot token validation warning: %s", e)
+        await message.answer("❌ Не вдалося перевірити токен. Спробуйте ще раз.")
+        return
+    finally:
+        await bot.session.close()
     await state.update_data(bot_token=token)
     await state.set_state(AddChannelStates.waiting_target_channel)
     await message.answer(
@@ -147,7 +175,13 @@ async def process_bot_token(message: Message, state: FSMContext):
 
 @router.message(AddChannelStates.waiting_target_channel)
 async def process_target_channel(message: Message, state: FSMContext):
-    await state.update_data(target_channel_id=message.text.strip())
+    target_channel = message.text.strip()
+    if not _is_valid_target_channel(target_channel):
+        await message.answer(
+            "❌ Невірний формат каналу. Використовуйте @username або -1001234567890."
+        )
+        return
+    await state.update_data(target_channel_id=target_channel)
     await state.set_state(AddChannelStates.waiting_prompt_style)
     kb = ReplyKeyboardMarkup(
         keyboard=[
@@ -231,13 +265,18 @@ async def process_source_link(message: Message, state: FSMContext):
     data = await state.get_data()
     channel = data["selected_channel"]
     source_link = message.text.strip()
+    if not _is_valid_source_link(source_link):
+        await message.answer(
+            "❌ Невірний формат джерела. Використовуйте @username або https://t.me/username."
+        )
+        return
     try:
         await add_source(channel["id"], source_link)
         await state.clear()
         await message.answer(
             f"✅ Джерело <code>{source_link}</code> додано до каналу "
             f"<code>{channel['target_channel_id']}</code>.\n\n"
-            "⚠️ Перезапустіть listener для застосування змін.",
+            "✅ Listener підхопить зміни автоматично протягом хвилини.",
             parse_mode=ParseMode.HTML,
         )
     except Exception as e:
