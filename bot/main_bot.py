@@ -38,6 +38,7 @@ from db import (
     get_stats,
 )
 from telethon import TelegramClient
+from telethon.utils import get_peer_id
 
 logger = logging.getLogger(__name__)
 
@@ -318,6 +319,25 @@ async def cmd_diagnose(message: Message):
 
     await message.answer("🔎 Запускаю діагностику... зачекайте 5-15 секунд.")
     lines: list[str] = []
+    listener_snapshot: dict = {"last_event": {}, "known_sources": []}
+    normalize_source_key_fn = None
+    try:
+        from parser.listener import get_listener_debug_snapshot, normalize_source_key
+
+        listener_snapshot = get_listener_debug_snapshot()
+        normalize_source_key_fn = normalize_source_key
+    except Exception as e:
+        lines.append(f"⚠️ Не вдалося отримати runtime-діагностику listener: {e}")
+
+    last_event = listener_snapshot.get("last_event", {})
+    last_event_keys = set(last_event.get("event_keys", []))
+    lines.append(
+        "🧭 Last listener event: "
+        f"chat_id={last_event.get('event_chat_id')} "
+        f"peer_id={last_event.get('event_peer_id')} "
+        f"keys={sorted(last_event_keys) if last_event_keys else '[]'}"
+    )
+    known_runtime_sources = listener_snapshot.get("known_sources", [])
 
     for ch in channels:
         lines.append(f"\n📢 Канал: <code>{ch['target_channel_id']}</code> (ID: {ch['id']})")
@@ -361,7 +381,54 @@ async def cmd_diagnose(message: Message):
                     normalized = raw.replace("https://t.me/", "").replace("http://t.me/", "").lstrip("@").split("/")[0]
                     try:
                         entity = await telethon_client.get_entity(normalized)
+                        source_username = normalized.lower()
+                        source_peer_id = None
+                        try:
+                            source_peer_id = get_peer_id(entity)
+                        except Exception:
+                            pass
+
+                        source_keys: set[str] = set()
+                        if normalize_source_key_fn:
+                            for candidate in (raw, f"@{source_username}", entity):
+                                key = normalize_source_key_fn(candidate)
+                                if key:
+                                    source_keys.add(key)
+                        else:
+                            source_keys.add(f"username:{source_username}")
+
+                        try:
+                            source_keys.add(f"peer:{get_peer_id(entity)}")
+                        except Exception:
+                            pass
+                        source_keys.add(f"id:{entity.id}")
+
+                        runtime_entry = next(
+                            (
+                                item
+                                for item in known_runtime_sources
+                                if item.get("channel_id") == ch["id"]
+                                and item.get("source_tg_link") == raw
+                            ),
+                            None,
+                        )
+                        runtime_keys = set(runtime_entry.get("source_keys", [])) if runtime_entry else set()
+                        check_keys = runtime_keys or source_keys
+                        match_status = "matched" if last_event_keys.intersection(check_keys) else "not matched"
+
                         lines.append(f"  ✅ Донор {raw} → OK (entity.id={entity.id})")
+                        lines.append(f"    • source_username={source_username}")
+                        lines.append(f"    • saved_peer_id={source_peer_id}")
+                        lines.append(f"    • normalized_source_key={sorted(source_keys)}")
+                        lines.append(
+                            f"    • runtime_source_keys={sorted(runtime_keys) if runtime_keys else '[]'}"
+                        )
+                        lines.append(
+                            "    • last_event="
+                            f"chat_id={last_event.get('event_chat_id')} "
+                            f"key={sorted(last_event_keys) if last_event_keys else '[]'}"
+                        )
+                        lines.append(f"    • match_result={match_status}")
                     except Exception as e:
                         lines.append(f"  ❌ Донор {raw} не резолвиться: {e}")
         except Exception as e:
