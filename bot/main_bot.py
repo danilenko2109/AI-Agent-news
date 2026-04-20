@@ -11,10 +11,12 @@ Commands:
 
 import logging
 import os
+from contextlib import suppress
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.enums import ParseMode
 from aiogram.filters import Command, CommandStart
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramUnauthorizedError
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -34,11 +36,14 @@ from db import (
     get_sources_for_channel,
     get_stats,
 )
+from telethon import TelegramClient
 
 logger = logging.getLogger(__name__)
 
 ADMIN_BOT_TOKEN = os.getenv("ADMIN_BOT_TOKEN", "")
 ADMIN_TG_ID = int(os.getenv("ADMIN_TG_ID", 0))  # Your personal Telegram ID
+TELEGRAM_API_ID = int(os.getenv("TELEGRAM_API_ID", 0))
+TELEGRAM_API_HASH = os.getenv("TELEGRAM_API_HASH", "")
 
 router = Router()
 
@@ -84,7 +89,8 @@ async def cmd_start(message: Message):
         f"Команди:\n"
         f"  /add_channel — Додати вихідний канал\n"
         f"  /add_source  — Додати канал-донор\n"
-        f"  /my_channels — Мої канали\n",
+        f"  /my_channels — Мої канали\n"
+        f"  /diagnose    — Перевірка причин помилок\n",
         parse_mode=ParseMode.HTML,
     )
 
@@ -256,6 +262,76 @@ async def cmd_stats(message: Message):
         f"📰 Опублікованих постів: <b>{stats['posts_published']}</b>",
         parse_mode=ParseMode.HTML,
     )
+
+
+@router.message(Command("diagnose"))
+async def cmd_diagnose(message: Message):
+    """
+    Deep diagnostics:
+    - verifies channel publishing bot tokens
+    - verifies access to target channels
+    - verifies source channels are resolvable by Telethon
+    """
+    channels = await get_user_channels(message.from_user.id)
+    if not channels:
+        await message.answer("Немає каналів для діагностики. Спочатку /add_channel.")
+        return
+
+    await message.answer("🔎 Запускаю діагностику... зачекайте 5-15 секунд.")
+    lines: list[str] = []
+
+    for ch in channels:
+        lines.append(f"\n📢 Канал: <code>{ch['target_channel_id']}</code> (ID: {ch['id']})")
+
+        test_bot = Bot(token=ch["bot_token"])
+        try:
+            me = await test_bot.get_me()
+            lines.append(f"  ✅ Bot token валідний: @{me.username}")
+            try:
+                chat = await test_bot.get_chat(ch["target_channel_id"])
+                lines.append(f"  ✅ Доступ до каналу: {chat.title or ch['target_channel_id']}")
+                member = await test_bot.get_chat_member(ch["target_channel_id"], me.id)
+                status = getattr(member, "status", "unknown")
+                lines.append(f"  ✅ Статус бота в каналі: {status}")
+            except (TelegramForbiddenError, TelegramBadRequest) as e:
+                lines.append(f"  ❌ Немає доступу до каналу або бот не адмін: {e}")
+        except TelegramUnauthorizedError:
+            lines.append("  ❌ Невалідний bot token (Unauthorized).")
+        except Exception as e:
+            lines.append(f"  ❌ Помилка перевірки bot token: {e}")
+        finally:
+            await test_bot.session.close()
+
+        sources = await get_sources_for_channel(ch["id"])
+        if not sources:
+            lines.append("  ⚠️ Джерела не додані.")
+            continue
+
+        if not TELEGRAM_API_ID or not TELEGRAM_API_HASH:
+            lines.append("  ❌ TELEGRAM_API_ID / TELEGRAM_API_HASH не налаштовані.")
+            continue
+
+        telethon_client = TelegramClient("session/parser_session", TELEGRAM_API_ID, TELEGRAM_API_HASH)
+        try:
+            await telethon_client.connect()
+            if not await telethon_client.is_user_authorized():
+                lines.append("  ❌ Telethon session не авторизована. Перезапустіть main.py і увійдіть.")
+            else:
+                for src in sources:
+                    raw = src["source_tg_link"].strip()
+                    normalized = raw.replace("https://t.me/", "").replace("http://t.me/", "").lstrip("@").split("/")[0]
+                    try:
+                        entity = await telethon_client.get_entity(normalized)
+                        lines.append(f"  ✅ Донор {raw} → OK (entity.id={entity.id})")
+                    except Exception as e:
+                        lines.append(f"  ❌ Донор {raw} не резолвиться: {e}")
+        except Exception as e:
+            lines.append(f"  ❌ Помилка Telethon під час перевірки донорів: {e}")
+        finally:
+            with suppress(Exception):
+                await telethon_client.disconnect()
+
+    await message.answer("\n".join(lines), parse_mode=ParseMode.HTML)
 
 
 # ─── Bot Factory ──────────────────────────────────────────────────────────────
