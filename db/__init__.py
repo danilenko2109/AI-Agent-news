@@ -1,0 +1,31 @@
+from db.database import (
+    init_db,
+    get_or_create_user,
+    is_user_active,
+    get_all_users,
+    add_channel,
+    get_user_channels,
+    get_all_active_channels,
+    add_source,
+    get_sources_for_channel,
+    get_all_sources,
+    is_duplicate,
+    mark_as_processed,
+    get_stats,
+)
+
+__all__ = [
+    "init_db",
+    "get_or_create_user",
+    "is_user_active",
+    "get_all_users",
+    "add_channel",
+    "get_user_channels",
+    "get_all_active_channels",
+    "add_source",
+    "get_sources_for_channel",
+    "get_all_sources",
+    "is_duplicate",
+    "mark_as_processed",
+    "get_stats",
+]
