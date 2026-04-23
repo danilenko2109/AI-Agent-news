@@ -1,0 +1,20 @@
+[project]
+name = "ai-news-agent"
+version = "0.1.0"
+description = "AI News Agent Telegram SaaS MVP"
+readme = "CLAUDE.md"
+requires-python = ">=3.10"
+dependencies = [
+    "aiogram==3.*",
+    "telethon",
+    "google-generativeai",
+    "aiosqlite",
+    "python-dotenv",
+    "pillow",
+    "tenacity",
+    "loguru",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
