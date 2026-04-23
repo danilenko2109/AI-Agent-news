@@ -22,7 +22,7 @@ API_ID = int(os.getenv("TELEGRAM_API_ID", 0))
 API_HASH = os.getenv("TELEGRAM_API_HASH", "")
 PHONE = os.getenv("TELEGRAM_PHONE", "")
 
-MIN_TEXT_LENGTH = 80  # Ignore very short messages (captions, stickers, etc.)
+MIN_TEXT_LENGTH = int(os.getenv("MIN_TEXT_LENGTH", 20))
 SOURCES_REFRESH_SECONDS = int(os.getenv("SOURCES_REFRESH_SECONDS", 60))
 BOT_TOKEN_RE = re.compile(r"^\d{6,}:[A-Za-z0-9_-]{20,}$")
 TARGET_CHANNEL_RE = re.compile(r"^(?:@[A-Za-z][A-Za-z0-9_]{4,}|-100\d{6,})$")
@@ -35,6 +35,7 @@ def _extract_username(link: str) -> str:
     """Extract @username or t.me/username from a source link."""
     link = link.strip()
     link = re.sub(r"https?://(t\.me|telegram\.me)/", "", link)
+    link = re.sub(r"^s/", "", link)
     link = link.lstrip("@").split("/")[0]
     return link
 
@@ -235,7 +236,9 @@ async def _process_message(
 
 def _is_valid_source_link(source_link: str) -> bool:
     normalized = source_link.strip()
-    return normalized.startswith("@") or "t.me/" in normalized
+    return bool(
+        re.match(r"^(?:@[\w\d_]{4,}|https?://(?:t\.me|telegram\.me)/(?:s/)?[\w\d_]{4,}(?:/\d+)?)$", normalized)
+    )
 
 
 def _is_valid_target_channel(target_channel_id: str) -> bool:

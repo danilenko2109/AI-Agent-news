@@ -50,7 +50,7 @@ TELEGRAM_API_HASH = os.getenv("TELEGRAM_API_HASH", "")
 router = Router()
 BOT_TOKEN_RE = re.compile(r"^\d{6,}:[A-Za-z0-9_-]{20,}$")
 TARGET_CHANNEL_RE = re.compile(r"^(?:@[A-Za-z][A-Za-z0-9_]{4,}|-100\d{6,})$")
-SOURCE_LINK_RE = re.compile(r"^(?:@[\w\d_]{4,}|https?://t\.me/[\w\d_]{4,}(?:/\d+)?)$")
+SOURCE_LINK_RE = re.compile(r"^(?:@[\w\d_]{4,}|https?://(?:t\.me|telegram\.me)/(?:s/)?[\w\d_]{4,}(?:/\d+)?)$")
 
 
 # ─── FSM States ───────────────────────────────────────────────────────────────
@@ -255,7 +255,8 @@ async def process_channel_select(message: Message, state: FSMContext):
     await state.set_state(AddSourceStates.waiting_source_link)
     await message.answer(
         "Надішліть посилання або @username каналу-донора:\n"
-        "Приклад: <code>@unian_ua</code> або <code>https://t.me/unian_ua</code>",
+        "Приклад: <code>@unian_ua</code> або <code>https://t.me/unian_ua</code>\n"
+        "(посилання буде автоматично збережено як @username)",
         reply_markup=ReplyKeyboardRemove(),
         parse_mode=ParseMode.HTML,
     )
@@ -280,6 +281,9 @@ async def process_source_link(message: Message, state: FSMContext):
             "✅ Listener підхопить зміни автоматично протягом хвилини.",
             parse_mode=ParseMode.HTML,
         )
+    except ValueError as e:
+        await state.clear()
+        await message.answer(f"❌ {e}")
     except Exception as e:
         logger.error("add_source error: %s", e)
         await state.clear()

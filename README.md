@@ -80,6 +80,7 @@ GEMINI_API_KEY=AIzaSy...
 DATABASE_PATH=./data/newsagent.db
 TRIAL_DAYS=3
 POST_DELAY=5
+MIN_TEXT_LENGTH=20
 ```
 
 > **Як дізнатись свій Telegram ID?** Напишіть [@userinfobot](https://t.me/userinfobot)
@@ -118,7 +119,8 @@ python main.py
                    • Bot Token: токен бота-публікатора
                    • Target Channel: @your_test_channel
                    • Style: default
-/add_source     → оберіть канал → введіть @unian_ua (або інший донор)
+/add_source     → оберіть канал → введіть @unian_ua або https://t.me/unian_ua
+                   (система нормалізує донорів до @username, без дублікатів)
 ```
 
 ### Крок 4: Перезапустіть

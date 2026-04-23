@@ -19,7 +19,18 @@ logger = logging.getLogger(__name__)
 
 DB_PATH = os.getenv("DATABASE_PATH", "./data/newsagent.db")
 TRIAL_DAYS = int(os.getenv("TRIAL_DAYS", 3))
-SOURCE_LINK_RE = re.compile(r"^(?:@[\w\d_]{4,}|https?://t\.me/[\w\d_]{4,}(?:/\d+)?)$")
+SOURCE_LINK_RE = re.compile(r"^(?:@[\w\d_]{4,}|https?://(?:t\.me|telegram\.me)/(?:s/)?[\w\d_]{4,}(?:/\d+)?)$")
+
+
+def normalize_source_link(source_tg_link: str) -> str:
+    """Convert source links to canonical @username format."""
+    normalized = source_tg_link.strip()
+    normalized = re.sub(r"^https?://(?:t\.me|telegram\.me)/", "", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r"^s/", "", normalized, flags=re.IGNORECASE)
+    normalized = normalized.lstrip("@").split("/")[0].strip().lower()
+    if not normalized:
+        raise ValueError("Empty source username")
+    return f"@{normalized}"
 
 
 @asynccontextmanager
@@ -140,16 +151,21 @@ async def get_all_active_channels() -> list[dict]:
 # ─── Sources ──────────────────────────────────────────────────────────────────
 
 async def add_source(channel_id: int, source_tg_link: str) -> int:
-    normalized_link = source_tg_link.strip()
-    if not SOURCE_LINK_RE.match(normalized_link):
+    raw_link = source_tg_link.strip()
+    if not SOURCE_LINK_RE.match(raw_link):
         raise ValueError("Invalid source Telegram link format")
+    normalized_link = normalize_source_link(raw_link)
 
     async with get_connection() as db:
+        existing = await db.execute(
+            "SELECT id FROM sources WHERE channel_id = ? AND source_tg_link = ?",
+            (channel_id, normalized_link),
+        )
+        if await existing.fetchone():
+            raise ValueError("Source already exists for this channel")
+
         cursor = await db.execute(
-            """
-            INSERT OR IGNORE INTO sources (channel_id, source_tg_link)
-            VALUES (?, ?)
-            """,
+            "INSERT INTO sources (channel_id, source_tg_link) VALUES (?, ?)",
             (channel_id, normalized_link),
         )
         await db.commit()
